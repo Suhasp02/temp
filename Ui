@@ -1,0 +1,35 @@
+import streamlit as st
+import requests
+
+st.set_page_config(page_title="RAG Question Answer")
+
+# Upload PDF
+st.sidebar.title("📄 Upload PDF")
+uploaded_file = st.sidebar.file_uploader("Upload a PDF file", type=["pdf"])
+
+if uploaded_file and st.sidebar.button("Process"):
+    files = {"file": (uploaded_file.name, uploaded_file, "application/pdf")}
+    response = requests.post("http://localhost:8000/upload-pdf/", files=files)
+    if response.status_code == 200:
+        st.success(f"✅ PDF processed! Chunks: {response.json()['chunks_count']}")
+    else:
+        st.error("❌ Failed to process PDF")
+
+# Question box
+st.header("💬 Ask a Question")
+question = st.text_input("Ask something from the uploaded PDF")
+
+if question:
+    query_res = requests.get(f"http://localhost:8000/query/?prompt={question}")
+    if query_res.status_code == 200:
+        contexts = query_res.json()["ranked_contexts"]
+        prompt_res = requests.post("http://localhost:8000/context-prompt/", json={"prompt": question, "context": contexts})
+        final_prompt = prompt_res.json()["prompt"]
+        gen_res = requests.post("http://localhost:8000/generate/", json={"prompt": final_prompt})
+        st.subheader("📜 Answer")
+        st.write(gen_res.json()["response"])
+
+        with st.expander("📚 Reranked Contexts"):
+            st.write(contexts)
+    else:
+        st.error("❌ Failed to get response from backend")
