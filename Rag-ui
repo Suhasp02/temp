@@ -1,0 +1,96 @@
+pdf-ai-service/
+├── api_server.py             # FastAPI API exposing endpoints
+├── pdf_ai_assistant.py       # Core logic (shared by Streamlit & FastAPI)
+├── main.py                   # Streamlit frontend UI
+├── requirements.txt          # Dependencies
+├── .gitignore
+├── models/                   # Local HuggingFace models if used
+└── data/                     # Sample PDFs or test input (optional)
+
+from fastapi import FastAPI, UploadFile, File
+from typing import List
+import shutil
+import tempfile
+import os
+
+from pdf_ai_assistant import (
+    read_and_chunk_pdfs,
+    process_document,
+    embed_and_store,
+    query_and_rerank,
+    context_specific_prompt,
+    getresponse
+)
+
+app = FastAPI()
+
+@app.post("/upload-pdf/")
+async def upload_pdf(file: UploadFile = File(...)):
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    with open(temp_file.name, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    with open(temp_file.name, "rb") as buffer:
+        file.file = buffer
+        chunks = process_document(file)
+    os.unlink(temp_file.name)
+    return {"message": "PDF processed", "chunks_count": len(chunks)}
+
+@app.post("/chunk-folder/")
+def chunk_folder(folder_path: str, chunk_size: int = 512, chunk_overlap: int = 100):
+    chunks = read_and_chunk_pdfs(folder_path, chunk_size, chunk_overlap)
+    return {"chunks_count": len(chunks)}
+
+@app.get("/query/")
+def query(prompt: str, top_k: int = 5):
+    ranked = query_and_rerank(prompt, top_k=top_k)
+    return {"ranked_contexts": ranked}
+
+@app.post("/context-prompt/")
+def make_prompt(prompt: str, context: List[str]):
+    full_prompt = context_specific_prompt(prompt, context)
+    return {"prompt": full_prompt}
+
+@app.post("/generate/")
+def generate(prompt: str):
+    response = getresponse(prompt)
+    return {"response": response}
+
+import streamlit as st
+import requests
+
+st.set_page_config(page_title="RAG Question Answer")
+
+# Upload PDF
+st.sidebar.title("📄 Upload PDF")
+uploaded_file = st.sidebar.file_uploader("Upload a PDF file", type=["pdf"])
+
+if uploaded_file and st.sidebar.button("Process"):
+    files = {"file": (uploaded_file.name, uploaded_file, "application/pdf")}
+    response = requests.post("http://localhost:8000/upload-pdf/", files=files)
+    if response.status_code == 200:
+        st.success(f"✅ PDF processed! Chunks: {response.json()['chunks_count']}")
+    else:
+        st.error("❌ Failed to process PDF")
+
+# Question box
+st.header("💬 Ask a Question")
+question = st.text_input("Ask something from the uploaded PDF")
+
+if question:
+    query_res = requests.get(f"http://localhost:8000/query/?prompt={question}")
+    if query_res.status_code == 200:
+        contexts = query_res.json()["ranked_contexts"]
+        prompt_res = requests.post("http://localhost:8000/context-prompt/", json={"prompt": question, "context": contexts})
+        final_prompt = prompt_res.json()["prompt"]
+        gen_res = requests.post("http://localhost:8000/generate/", json={"prompt": final_prompt})
+        st.subheader("📜 Answer")
+        st.write(gen_res.json()["response"])
+
+        with st.expander("📚 Reranked Contexts"):
+            st.write(contexts)
+    else:
+        st.error("❌ Failed to get response from backend")
+
+
+
+
