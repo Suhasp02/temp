@@ -1,0 +1,15 @@
+flowchart TD
+  A[User\n spark3-submit bin/run_ingestion.py --job-name X] --> B[Launcher\nRead /user/<os_user>/jobs.config]
+  B --> C[Validate required keys\n BIZ_DT not '*' or 'ALL'\n Open unified log\n Build argv]
+  C --> D[Import dds_framework.ingestion_job\nCall run(argv)]
+  D --> E[Ingestion\nBuild SparkSession (Hive)]
+  E --> F[Resolve user from Spark\nLog params]
+  E --> G[Resolve biz_dt\nIf blank: MAX from dds_meta.date_dim filtered by system/site]
+  G --> H[Discover schema via DESCRIBE\nChoose partitions\nBuild WHERE]
+  H --> I{Target exists?}
+  I -- No --> J[CTAS IF NOT EXISTS\nUSING PARQUET\nSELECT ... WHERE ...]
+  I -- Yes --> K[INSERT INTO/OVERWRITE\nDynamic partitions]
+  J --> L
+  K --> L
+  L[Count source/loaded (SQL)\nAudit INSERT (SQL)] --> M[Stop Spark]
+  M --> N[Launcher copies unified log to /user/<os_user>/logs/<job_name>/]
